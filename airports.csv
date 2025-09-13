@@ -1,0 +1,87 @@
+IATA,City,Airport,Country
+BGY,Bergamo,Orio al Serio,IT
+MXP,Milano,Malpensa,IT
+LIN,Milano,Linate,IT
+FCO,Roma,Fiumicino,IT
+CIA,Roma,Ciampino,IT
+TSF,Treviso,Treviso,IT
+VCE,Venezia,Marco Polo,IT
+NAP,Napoli,Capodichino,IT
+PMO,Palermo,Falcone–Borsellino,IT
+CAG,Cagliari,Elmas,IT
+CTA,Catania,Fontanarossa,IT
+BRI,Bari,Palese,IT
+TRN,Torino,Caselle,IT
+PSA,Pisa,Galileo Galilei,IT
+VRN,Verona,Valerio Catullo,IT
+OLB,Olbia,Costa Smeralda,IT
+AHO,Alghero,Fertilia,IT
+BCN,Barcellona,El Prat,ES
+GRO,Girona,Costa Brava,ES
+MAD,Madrid,Barajas,ES
+PMI,Palma di Maiorca,Son Sant Joan,ES
+IBZ,Ibiza,Ibiza Airport,ES
+AGP,Malaga,Costa del Sol,ES
+SVQ,Siviglia,San Pablo,ES
+VLC,Valencia,Valencia Airport,ES
+ALC,Alicante,Alicante-Elche,ES
+TFS,Tenerife,Sur,ES
+LPA,Gran Canaria,Gran Canaria,ES
+STN,Londra,Stansted,UK
+LTN,Londra,Luton,UK
+LGW,Londra,Gatwick,UK
+EDI,Edimburgo,Edinburgh,UK
+GLA,Glasgow,Glasgow,UK
+MAN,Manchester,Manchester,UK
+LPL,Liverpool,Liverpool,UK
+BHX,Birmingham,Birmingham,UK
+BRS,Bristol,Bristol,UK
+NCL,Newcastle,Newcastle,UK
+BFS,Belfast,International,UK
+DUB,Dublino,Dublin,IE
+SNN,Shannon,Shannon,IE
+ORK,Cork,Cork,IE
+CDG,Parigi,Charles de Gaulle,FR
+ORY,Parigi,Orly,FR
+BVA,Parigi,Beauvais,FR
+MRS,Marsiglia,Provence,FR
+NCE,Nizza,Côte d’Azur,FR
+LYS,Lione,Saint Exupéry,FR
+TLS,Tolosa,Blagnac,FR
+BOD,Bordeaux,Mérignac,FR
+NTE,Nantes,Atlantique,FR
+FRA,Francoforte,Main,DE
+HHN,Francoforte,Hahn,DE
+MUC,Monaco,Franz Josef Strauss,DE
+NRN,Weeze,Düsseldorf Weeze,DE
+DUS,Düsseldorf,Düsseldorf,DE
+BER,Berlino,Berlin Brandenburg,DE
+HAM,Amburgo,Hamburg,DE
+CGN,Colonia,Bonn,DE
+STR,Stoccarda,Stuttgart,DE
+NUE,Norimberga,Nuremberg,DE
+AMS,Amsterdam,Schiphol,NL
+EIN,Eindhoven,Eindhoven,NL
+RTM,Rotterdam,Rotterdam The Hague,NL
+BRU,Bruxelles,Brussels,BE
+CRL,Bruxelles,Charleroi,BE
+BUD,Budapest,Budapest,HU
+PRG,Praga,Václav Havel,CZ
+VIE,Vienna,Schwechat,AT
+ATH,Atene,Eleftherios Venizelos,GR
+SKG,Salonicco,Macedonia,GR
+LIS,Lisbona,Humberto Delgado,PT
+OPO,Porto,Francisco Sá Carneiro,PT
+FAO,Faro,Faro,PT
+WAW,Varsavia,Chopin,PL
+WMI,Varsavia,Modlin,PL
+KRK,Cracovia,John Paul II,PL
+GDN,Danzica,Lech Walesa,PL
+KTW,Katowice,Pyrzowice,PL
+SOF,Sofia,Sofia,BG
+OTP,Bucarest,Henri Coandă,RO
+CLJ,Cluj-Napoca,Avram Iancu,RO
+TIA,Tirana,Tirana International,AL
+RIX,Riga,Riga,LV
+VNO,Vilnius,Vilnius,LT
+TLL,Tallinn,Tallinn,EE
