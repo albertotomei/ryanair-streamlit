@@ -1,0 +1,4 @@
+ryanair-py
+pandas
+streamlit
+openpyxl
