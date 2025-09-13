@@ -1,22 +1,28 @@
 import streamlit as st
 import pandas as pd
 from datetime import date, time, timedelta
-from typing import List, Optional, Tuple
+from typing import List, Optional
 import io
 import os
 
-st.set_page_config(page_title="Ryanair Finder", page_icon="✈️", layout="wide")
-st.title("✈️ Ryanair Finder (Web)")
-st.caption("ryanair-py • oneway / return / duration • multi origini/destinazioni • diretti • giorni/orari • prezzo • ordinamento • export CSV/XLSX")
+st.set_page_config(page_title="Ryanair Finder (Duration A/R)", page_icon="✈️", layout="wide")
+st.title("✈️ Ryanair Finder — Duration (A/R) di default")
+st.caption("ryanair-py • durata fissa/forchetta • multi origini/destinazioni • diretti • giorni/orari • prezzo • export")
 
-# ---- Libreria backend
+# ---------- Libreria backend con fallback costruttore ----------
 try:
     from ryanair import Ryanair
 except Exception:
     st.error("Impossibile importare 'ryanair'. Aggiungi il pacchetto 'ryanair-py' in requirements.txt.")
     st.stop()
 
-# ---- Utilità
+def build_api(currency: str, adults: int, children: int):
+    try:
+        return Ryanair(currency=currency, adults=adults, children=children)
+    except TypeError:
+        return Ryanair(currency=currency)
+
+# ---------- Utilità ----------
 IT_DOW = ["lun", "mar", "mer", "gio", "ven", "sab", "dom"]
 
 def fmt_it(dt):
@@ -62,200 +68,116 @@ def keep_by_time_window(dt, after: Optional[time], before: Optional[time]) -> bo
         return False
     return True
 
-def build_api(currency: str, adults: int, children: int):
-    # fallback per versioni di ryanair-py senza adults/children
-    try:
-        return Ryanair(currency=currency, adults=adults, children=children)
-    except TypeError:
-        return Ryanair(currency=currency)
+def to_csv_bytes(df: pd.DataFrame) -> bytes:
+    return df.to_csv(index=False).encode("utf-8")
 
-# ---- Aeroporti (picker)
-# 1) tenta di caricare airports.csv locale (IATA,City,Airport,Country)
-AIRPORTS: List[Tuple[str,str,str,str]] = []
-csv_path = "airports.csv"
-if os.path.exists(csv_path):
-    try:
-        df_air = pd.read_csv(csv_path)
-        # expected columns: IATA,City,Airport,Country
-        for _, r in df_air.iterrows():
-            AIRPORTS.append((str(r["IATA"]).upper(), str(r["City"]), str(r["Airport"]), str(r.get("Country",""))))
-    except Exception as e:
-        st.warning(f"Impossibile leggere airports.csv ({e}). Uso lista interna di esempi.")
+def to_xlsx_bytes(df: pd.DataFrame) -> bytes:
+    bio = io.BytesIO()
+    with pd.ExcelWriter(bio, engine="openpyxl") as w:
+        df.to_excel(w, index=False)
+    return bio.getvalue()
 
-if not AIRPORTS:
-    # 2) lista interna minima (espandila a piacere o usa airports.csv)
-    AIRPORTS = [
-        ("BGY","Bergamo","Orio al Serio","IT"),
-        ("MXP","Milano","Malpensa","IT"),
-        ("LIN","Milano","Linate","IT"),
-        ("FCO","Roma","Fiumicino","IT"),
-        ("CIA","Roma","Ciampino","IT"),
-        ("TSF","Treviso","Treviso","IT"),
-        ("VCE","Venezia","Marco Polo","IT"),
-        ("NAP","Napoli","Capodichino","IT"),
-        ("PMO","Palermo","Falcone–Borsellino","IT"),
-        ("CAG","Cagliari","Elmas","IT"),
-        ("CAG","Cagliari","Elmas","IT"),
-        ("BCN","Barcellona","El Prat","ES"),
-        ("MAD","Madrid","Barajas","ES"),
-        ("PMI","Palma di Maiorca","PMI","ES"),
-        ("STN","Londra","Stansted","UK"),
-        ("LTN","Londra","Luton","UK"),
-        ("DUB","Dublino","Dublin","IE"),
-        ("CDG","Parigi","Charles de Gaulle","FR"),
-        ("ORY","Parigi","Orly","FR"),
-        ("AMS","Amsterdam","Schiphol","NL"),
-        ("BRU","Bruxelles","Brussels","BE"),
-        ("BUD","Budapest","Budapest","HU"),
-        ("PRG","Praga","Václav Havel","CZ"),
-        ("VIE","Vienna","Schwechat","AT"),
-        ("ATH","Atene","Eleftherios Venizelos","GR"),
-        ("LIS","Lisbona","Humberto Delgado","PT"),
-        ("OPO","Porto","Francisco Sá Carneiro","PT"),
-    ]
+# ---------- Aeroporti da CSV (obbligatorio) ----------
+CSV_PATH = "airports.csv"  # metti qui il tuo file ordinato per città
+if not os.path.exists(CSV_PATH):
+    st.error("File 'airports.csv' non trovato. Mettilo nella stessa cartella dell'app.")
+    st.stop()
 
-def airport_label(iata, city, name, country):
-    suffix = f" · {country}" if country else ""
-    return f"{city} — {name} ({iata}){suffix}"
+air_df = pd.read_csv(CSV_PATH)
+if not {"IATA","City","Airport","Country"}.issubset(air_df.columns):
+    st.error("Il CSV deve avere le colonne: IATA,City,Airport,Country")
+    st.stop()
 
-def pick_airports_multiselect(key: str, default_codes: List[str]) -> List[str]:
-    # costruiamo mapping label->IATA per ricerca testuale
-    options = [airport_label(*a) for a in AIRPORTS]
-    code_map = {airport_label(*a): a[0] for a in AIRPORTS}
-    # pre-selezione in base ai codici (se presenti in lista)
-    defaults = [lbl for lbl in options if code_map[lbl] in set(default_codes)]
-    picked_labels = st.multiselect("Seleziona aeroporti", options, default=defaults, key=key)
-    return [code_map[lbl] for lbl in picked_labels]
+# ordina per City (se non già ordinato)
+air_df = air_df.sort_values(by=["City","Airport","IATA"]).reset_index(drop=True)
+air_records = air_df.to_dict(orient="records")
+label_map = {
+    r["IATA"].upper(): f"{r['City']} – {r['Airport']} ({r['IATA'].upper()}) · {r['Country']}"
+    for r in air_records
+}
+all_iata = list(label_map.keys())
 
-def pick_airport_single(key: str, default_code: Optional[str]) -> Optional[str]:
-    options = ["(Nessuna)"] + [airport_label(*a) for a in AIRPORTS]
-    code_map = {airport_label(*a): a[0] for a in AIRPORTS}
-    default_label = "(Nessuna)"
-    if default_code:
-        for a in AIRPORTS:
-            if a[0].upper() == default_code.upper():
-                default_label = airport_label(*a)
-                break
-    lbl = st.selectbox("Seleziona destinazione (singola, opzionale)", options, index=options.index(default_label), key=key)
-    return None if lbl == "(Nessuna)" else code_map[lbl]
+def multiselect_airports(label: str, key: str, default_codes: List[str]) -> List[str]:
+    options = all_iata
+    fmt = lambda iata: label_map.get(iata, iata)
+    # Preselezione se codice presente in lista
+    defaults = [c for c in default_codes if c in options]
+    return st.multiselect(label, options=options, default=defaults, format_func=fmt, key=key)
 
-# ---- Ricerca
+def select_optional_airport(label: str, key: str) -> Optional[str]:
+    options = ["(Nessuna)"] + all_iata
+    fmt = lambda x: "(Nessuna)" if x == "(Nessuna)" else label_map.get(x, x)
+    sel = st.selectbox(label, options=options, index=0, format_func=fmt, key=key)
+    return None if sel == "(Nessuna)" else sel
+
+# ---------- Sidebar (DEFAULT = DURATION) ----------
+st.sidebar.header("Parametri ricerca (A/R duration di default)")
+
+# Origini/Destinazioni
+origins = multiselect_airports("Origini (multi)", "origins", default_codes=["FCO"])  # default FCO come tuo esempio
+dest_single = select_optional_airport("Destinazione (singola, opzionale)", "dest_single")
+dests_multi = multiselect_airports("Destinazioni (multiple, opzionali)", "dests_multi", default_codes=["BVA"])
+
+# Passeggeri, valuta, diretti, prezzo
+col_p1, col_p2 = st.sidebar.columns(2)
+with col_p1:
+    adults = st.number_input("Adulti", 1, 10, 2)       # default 2 come esempio
+with col_p2:
+    children = st.number_input("Bambini", 0, 10, 2)    # default 2 come esempio
+
+nonstop = st.sidebar.checkbox("Solo diretti", value=True)
+currency = st.sidebar.selectbox("Valuta", ["EUR","GBP","USD","PLN","RON","HUF","CZK"], index=0)
+price_max_val = st.sidebar.number_input("Prezzo max / pax (0 = nessun limite)", 0, 10000, 100)  # default 100 come esempio
+price_max = None if price_max_val == 0 else float(price_max_val)
+
+# Giorni e fasce orarie (partenza outbound; arrivo outbound)
+weekday = st.sidebar.multiselect("Giorni di partenza (IT)", IT_DOW, default=[])
+dep_after = st.sidebar.time_input("Partenza dopo (>=)", value=time(0,0))
+dep_before = st.sidebar.time_input("Partenza prima (<=)", value=time(23,59))
+arr_after = st.sidebar.time_input("Arrivo dopo (>=)", value=time(0,0))
+arr_before = st.sidebar.time_input("Arrivo prima (<=)", value=time(23,59))
+
+# Finestra temporale + durata
+today = date.today()
+start = st.sidebar.date_input("Inizio ricerca", date(2025,10,1))     # default come tuo esempio
+end   = st.sidebar.date_input("Fine ricerca",   date(2026,5,31))     # default come tuo esempio
+
+dur_kind = st.sidebar.selectbox("Durata", ["Singola","Forchetta"], index=0)
+if dur_kind == "Singola":
+    days_values = [st.sidebar.number_input("Giorni (esatti)", 1, 30, 3)]  # default 3 come esempio
+else:
+    dmin = st.sidebar.number_input("Giorni min", 1, 30, 3)
+    dmax = st.sidebar.number_input("Giorni max", int(dmin), 60, max(int(dmin), 6))
+    days_values = list(range(int(dmin), int(dmax)+1))
+
+step_days = int(st.sidebar.number_input("Step tra partenze (giorni)", 1, 14, 1))  # default 1 come esempio
+
+# Ordinamento + limite
+sort_by = st.selectbox("Ordina per", ["departure","price_each","total_price_each","group_total"], index=0)
+limit = st.number_input("Limite righe (0 = nessun limite)", 0, 10000, 0)
+
+go = st.button("🔎 Cerca (A/R duration)")
+
+# ---------- Ricerca Duration (replica CLI) ----------
 @st.cache_data(show_spinner=True)
-def search_oneway(origins: List[str], dest_single: Optional[str], dests_multi: List[str],
-                  start: date, end: date, currency: str, adults: int, children: int,
-                  nonstop: bool, price_max: Optional[float],
-                  weekday: List[str], dep_after: Optional[time], dep_before: Optional[time],
-                  arr_after: Optional[time], arr_before: Optional[time]) -> pd.DataFrame:
+def search_duration(
+    origins: List[str], dest_single: Optional[str], dests_multi: List[str],
+    start: date, end: date, days_values: List[int], step_days: int,
+    currency: str, adults: int, children: int,
+    nonstop: bool, price_max: Optional[float],
+    weekday: List[str], dep_after: Optional[time], dep_before: Optional[time],
+    arr_after: Optional[time], arr_before: Optional[time]
+) -> pd.DataFrame:
+
     api = build_api(currency, adults, children)
     rows = []
-    for origin in origins:
-        flights = api.get_cheapest_flights(origin, start, end)
-        # filtro destinazioni (singola o multiple)
-        def match_dest(code):
-            if dest_single:
-                return code.upper() == dest_single.upper()
-            return (not dests_multi) or (code.upper() in dests_multi)
-        flights = [f for f in flights if match_dest(getattr(f, "destination", ""))]
 
-        # diretti
-        if nonstop:
-            tmp = []
-            for f in flights:
-                ns = is_nonstop_leg(f)
-                if ns is True or ns is None:
-                    tmp.append(f)
-            flights = tmp
+    def match_dest(code: str) -> bool:
+        code = (code or "").upper()
+        if dest_single:
+            return code == dest_single.upper()
+        return (not dests_multi) or (code in dests_multi)
 
-        # prezzo / pax
-        if price_max is not None:
-            flights = [f for f in flights if isinstance(getattr(f, "price", None), (int,float)) and f.price <= price_max]
-
-        # giorni/orari
-        flights = [f for f in flights if keep_by_weekday(getattr(f, "departureTime", None), weekday)]
-        flights = [f for f in flights if keep_by_time_window(getattr(f, "departureTime", None), dep_after, dep_before)]
-        flights = [f for f in flights if keep_by_time_window(getattr(f, "arrivalTime", None), arr_after, arr_before)]
-
-        for f in flights:
-            rows.append({
-                "PREZZO/PAX": getattr(f, "price", None),
-                "VALUTA": getattr(f, "currency", currency),
-                "ORIGINE": getattr(f, "origin",""),
-                "DEST": getattr(f,"destination",""),
-                "PARTENZA": getattr(f, "departureTime", None),
-                "ARRIVO": getattr(f, "arrivalTime", None),
-                "VOLO": getattr(f,"flightNumber",""),
-                "PARTENZA (IT)": fmt_it(getattr(f, "departureTime", None)),
-                "ARRIVO (IT)": fmt_it(getattr(f, "arrivalTime", None)),
-            })
-    return pd.DataFrame(rows)
-
-@st.cache_data(show_spinner=True)
-def search_return(origins: List[str], dest_single: Optional[str], dests_multi: List[str],
-                  ob_start: date, ob_end: date, ib_start: date, ib_end: date,
-                  currency: str, adults: int, children: int,
-                  nonstop: bool, price_max: Optional[float],
-                  weekday: List[str], dep_after: Optional[time], dep_before: Optional[time],
-                  arr_after: Optional[time], arr_before: Optional[time]) -> pd.DataFrame:
-    api = build_api(currency, adults, children)
-    rows = []
-    for origin in origins:
-        trips = api.get_cheapest_return_flights(origin, ob_start, ob_end, ib_start, ib_end)
-
-        def match_dest(code):
-            if dest_single:
-                return code.upper() == dest_single.upper()
-            return (not dests_multi) or (code.upper() in dests_multi)
-        trips = [t for t in trips if match_dest(getattr(t.outbound, "destination", ""))]
-
-        if nonstop:
-            tmp = []
-            for t in trips:
-                ns_out = is_nonstop_leg(t.outbound)
-                ns_in = is_nonstop_leg(t.inbound)
-                ok_out = (ns_out is True) or (ns_out is None)
-                ok_in = (ns_in is True) or (ns_in is None)
-                if ok_out and ok_in:
-                    tmp.append(t)
-            trips = tmp
-
-        if price_max is not None:
-            trips = [t for t in trips if isinstance(getattr(t, "totalPrice", None), (int,float)) and t.totalPrice <= price_max]
-
-        trips = [t for t in trips if keep_by_weekday(getattr(t.outbound, "departureTime", None), weekday)]
-        trips = [t for t in trips if keep_by_time_window(getattr(t.outbound, "departureTime", None), dep_after, dep_before)]
-        trips = [t for t in trips if keep_by_time_window(getattr(t.outbound, "arrivalTime", None), arr_after, arr_before)]
-
-        for t in trips:
-            out, inn = t.outbound, t.inbound
-            rows.append({
-                "PREZZO/PAX (TOT A/R)": getattr(t, "totalPrice", None),
-                "VALUTA": getattr(out, "currency", currency),
-                "OUT: PREZZO/PAX": getattr(out, "price", None),
-                "OUT: PARTENZA": getattr(out, "departureTime", None),
-                "OUT: ARRIVO": getattr(out, "arrivalTime", None),
-                "OUT: VOLO": getattr(out, "flightNumber", ""),
-                "IN: PREZZO/PAX": getattr(inn, "price", None),
-                "IN: PARTENZA": getattr(inn, "departureTime", None),
-                "IN: ARRIVO": getattr(inn, "arrivalTime", None),
-                "IN: VOLO": getattr(inn, "flightNumber", ""),
-                "ORIGINE": getattr(out, "origin", ""),
-                "DEST": getattr(out, "destination", ""),
-                "OUT: PARTENZA (IT)": fmt_it(getattr(out, "departureTime", None)),
-                "OUT: ARRIVO (IT)": fmt_it(getattr(out, "arrivalTime", None)),
-                "IN: PARTENZA (IT)": fmt_it(getattr(inn, "departureTime", None)),
-                "IN: ARRIVO (IT)": fmt_it(getattr(inn, "arrivalTime", None)),
-            })
-    return pd.DataFrame(rows)
-
-@st.cache_data(show_spinner=True)
-def search_duration(origins: List[str], dest_single: Optional[str], dests_multi: List[str],
-                    start: date, end: date, days_values: List[int], step_days: int,
-                    currency: str, adults: int, children: int,
-                    nonstop: bool, price_max: Optional[float],
-                    weekday: List[str], dep_after: Optional[time], dep_before: Optional[time],
-                    arr_after: Optional[time], arr_before: Optional[time]) -> pd.DataFrame:
-    api = build_api(currency, adults, children)
-    rows = []
     for origin in origins:
         for dv in days_values:
             stay = timedelta(days=dv)
@@ -264,39 +186,54 @@ def search_duration(origins: List[str], dest_single: Optional[str], dests_multi:
             while current <= last_departure:
                 out_start = out_end = current
                 in_start = in_end = current + stay
-                trips = api.get_cheapest_return_flights(origin, out_start, out_end, in_start, in_end)
 
-                def match_dest(code):
-                    if dest_single:
-                        return code.upper() == dest_single.upper()
-                    return (not dests_multi) or (code.upper() in dests_multi)
+                trips = api.get_cheapest_return_flights(origin, out_start, out_end, in_start, in_end)
+                # filtri rotta
                 trips = [t for t in trips if match_dest(getattr(t.outbound, "destination", ""))]
 
+                # diretti (se info disponibile; se ignota, non escludo)
                 if nonstop:
                     tmp = []
                     for t in trips:
                         ns_out = is_nonstop_leg(t.outbound)
-                        ns_in = is_nonstop_leg(t.inbound)
+                        ns_in  = is_nonstop_leg(t.inbound)
                         ok_out = (ns_out is True) or (ns_out is None)
-                        ok_in = (ns_in is True) or (ns_in is None)
+                        ok_in  = (ns_in  is True) or (ns_in  is None)
                         if ok_out and ok_in:
                             tmp.append(t)
                     trips = tmp
 
-                trips = [t for t in trips if (getattr(t.inbound, "departureTime", None) and getattr(t.outbound, "departureTime", None) and ((t.inbound.departureTime.date() - t.outbound.departureTime.date()).days == dv))]
+                # durata esatta (per sicurezza)
+                trips = [
+                    t for t in trips
+                    if getattr(t.inbound, "departureTime", None)
+                    and getattr(t.outbound, "departureTime", None)
+                    and ((t.inbound.departureTime.date() - t.outbound.departureTime.date()).days == dv)
+                ]
+
+                # weekday/orari su OUTBOUND (partenza e arrivo)
                 trips = [t for t in trips if keep_by_weekday(getattr(t.outbound, "departureTime", None), weekday)]
                 trips = [t for t in trips if keep_by_time_window(getattr(t.outbound, "departureTime", None), dep_after, dep_before)]
-                trips = [t for t in trips if keep_by_time_window(getattr(t.outbound, "arrivalTime", None), arr_after, arr_before)]
+                trips = [t for t in trips if keep_by_time_window(getattr(t.outbound, "arrivalTime", None),  arr_after, arr_before)]
 
+                # prezzo max per pax sul totale A/R
+                if price_max is not None:
+                    trips = [
+                        t for t in trips
+                        if isinstance(getattr(t, "totalPrice", None), (int,float))
+                        and t.totalPrice <= price_max
+                    ]
+
+                # output righe
+                pax = adults + children
                 for t in trips:
                     out, inn = t.outbound, t.inbound
-                    if price_max is not None:
-                        tp = getattr(t, "totalPrice", None)
-                        if not (isinstance(tp, (int,float)) and tp <= price_max):
-                            continue
+                    price_each_total = getattr(t, "totalPrice", None)
                     rows.append({
-                        "PREZZO/PAX (TOT A/R)": getattr(t, "totalPrice", None),
+                        "PREZZO/PAX (TOT A/R)": price_each_total,
                         "VALUTA": getattr(out, "currency", currency),
+                        "PAX (A+B)": f"{adults}+{children}",
+                        "TOT STIM. GRUPPO": (price_each_total or 0) * pax if isinstance(price_each_total, (int,float)) else None,
                         "OUT: PREZZO/PAX": getattr(out, "price", None),
                         "OUT: PARTENZA": getattr(out, "departureTime", None),
                         "OUT: ARRIVO": getattr(out, "arrivalTime", None),
@@ -314,138 +251,74 @@ def search_duration(origins: List[str], dest_single: Optional[str], dests_multi:
                         "IN: ARRIVO (IT)": fmt_it(getattr(inn, "arrivalTime", None)),
                     })
                 current += timedelta(days=step_days)
-    return pd.DataFrame(rows)
 
-# ---- Sidebar: parametri
-st.sidebar.header("Parametri")
-mode = st.sidebar.selectbox("Modalità", ["oneway","return","duration"])
-
-# Toggle per usare la tendina aeroporti
-use_picker = st.sidebar.checkbox("Scegli aeroporti da tendina (consigliato)")
-
-if use_picker:
-    origins_default = ["BGY","MXP"]
-    origins = pick_airports_multiselect("origins_picker", origins_default)
-    dest_single = pick_airport_single("dest_picker", None)
-    dests_multi = parse_csv(st.sidebar.text_input("OPZIONALE: Dest multiple CSV (integra la tendina)", ""))
-else:
-    origins = parse_csv(st.sidebar.text_input("Origini (CSV)", "BGY,MXP"))
-    dest_single_txt = st.sidebar.text_input("Dest singola (opzionale)", "")
-    dest_single = dest_single_txt.strip().upper() or None
-    dests_multi = parse_csv(st.sidebar.text_input("Dest multiple CSV (opzionale)", ""))
-
-colp1, colp2 = st.sidebar.columns(2)
-with colp1:
-    adults = st.number_input("Adulti", 1, 10, 1)
-with colp2:
-    children = st.number_input("Bambini", 0, 10, 0)
-
-nonstop = st.sidebar.checkbox("Solo diretti")
-currency = st.sidebar.selectbox("Valuta", ["EUR","GBP","USD"], index=0)
-price_max_val = st.sidebar.number_input("Prezzo max / pax (0 = nessun limite)", 0, 10000, 0)
-price_max = None if price_max_val == 0 else float(price_max_val)
-
-weekday = st.sidebar.multiselect("Giorni di partenza (IT)", IT_DOW, [])
-dep_after = st.sidebar.time_input("Partenza dopo (>=)", value=time(0,0))
-dep_before = st.sidebar.time_input("Partenza prima (<=)", value=time(23,59))
-arr_after = st.sidebar.time_input("Arrivo dopo (>=)", value=time(0,0))
-arr_before = st.sidebar.time_input("Arrivo prima (<=)", value=time(23,59))
-
-# Date per modalità
-today = date.today()
-if mode == "oneway":
-    start = st.sidebar.date_input("Inizio", today)
-    end = st.sidebar.date_input("Fine", today + timedelta(days=30))
-elif mode == "return":
-    ob_start = st.sidebar.date_input("Inizio ANDATA", today)
-    ob_end = st.sidebar.date_input("Fine ANDATA", today + timedelta(days=15))
-    ib_start = st.sidebar.date_input("Inizio RITORNO", today + timedelta(days=3))
-    ib_end = st.sidebar.date_input("Fine RITORNO", today + timedelta(days=30))
-else:
-    start = st.sidebar.date_input("Inizio ricerca", today)
-    end = st.sidebar.date_input("Fine ricerca", today + timedelta(days=60))
-    dur_kind = st.sidebar.selectbox("Durata", ["Singola","Forchetta"])
-    if dur_kind == "Singola":
-        days_values = [st.sidebar.number_input("Giorni (esatti)", 1, 30, 4)]
-    else:
-        dmin = st.sidebar.number_input("Giorni min", 1, 30, 4)
-        dmax = st.sidebar.number_input("Giorni max", int(dmin), 60, max(int(dmin),6))
-        days_values = list(range(int(dmin), int(dmax)+1))
-    step_days = int(st.sidebar.number_input("Step tra partenze (giorni)", 1, 14, 1))
-
-sort_by = st.selectbox("Ordina per", ["departure","price_each","total_price_each","group_total"])
-limit = st.number_input("Limite righe (0 = nessun limite)", 0, 5000, 0)
-
-go = st.button("🔎 Cerca voli")
+    df = pd.DataFrame(rows)
+    return df
 
 def sort_df(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     if sort_by == "departure":
-        key = "PARTENZA" if "PARTENZA" in df.columns else ("OUT: PARTENZA" if "OUT: PARTENZA" in df.columns else df.columns[0])
+        key = "OUT: PARTENZA" if "OUT: PARTENZA" in df.columns else df.columns[0]
         return df.sort_values(by=key, ascending=True, kind="mergesort")
     if sort_by == "price_each":
-        key = "PREZZO/PAX" if "PREZZO/PAX" in df.columns else "OUT: PREZZO/PAX"
+        key = "OUT: PREZZO/PAX" if "OUT: PREZZO/PAX" in df.columns else "PREZZO/PAX (TOT A/R)"
         return df.sort_values(by=key, ascending=True, na_position="last", kind="mergesort")
     if sort_by == "total_price_each":
-        key = "PREZZO/PAX (TOT A/R)" if "PREZZO/PAX (TOT A/R)" in df.columns else "PREZZO/PAX"
+        key = "PREZZO/PAX (TOT A/R)" if "PREZZO/PAX (TOT A/R)" in df.columns else "OUT: PREZZO/PAX"
         return df.sort_values(by=key, ascending=True, na_position="last", kind="mergesort")
     if sort_by == "group_total":
-        key = "TOT STIM. GRUPPO" if "TOT STIM. GRUPPO" in df.columns else "TOT STIM."
+        key = "TOT STIM. GRUPPO"
         if key in df.columns:
             return df.sort_values(by=key, ascending=True, na_position="last", kind="mergesort")
     return df
 
-def to_csv_bytes(df: pd.DataFrame) -> bytes:
-    return df.to_csv(index=False).encode("utf-8")
-
-def to_xlsx_bytes(df: pd.DataFrame) -> bytes:
-    bio = io.BytesIO()
-    with pd.ExcelWriter(bio, engine="openpyxl") as w:
-        df.to_excel(w, index=False)
-    return bio.getvalue()
-
+# ---------- Azione ----------
 if go:
     if not origins:
-        st.warning("Inserisci almeno una origine (o selezionala dalla tendina).")
+        st.warning("Seleziona almeno una origine.")
         st.stop()
 
-    with st.spinner("Cerco i voli…"):
-        if mode == "oneway":
-            df = search_oneway(origins, dest_single, dests_multi, start, end, currency, adults, children,
-                               nonstop, price_max, weekday, dep_after, dep_before, arr_after, arr_before)
-        elif mode == "return":
-            df = search_return(origins, dest_single, dests_multi, ob_start, ob_end, ib_start, ib_end,
-                               currency, adults, children, nonstop, price_max, weekday, dep_after, dep_before, arr_after, arr_before)
-            # calcola TOT STIM. GRUPPO se possibile
-            if not df.empty and "PREZZO/PAX (TOT A/R)" in df.columns:
-                pax = adults + children
-                df["TOT STIM. GRUPPO"] = df["PREZZO/PAX (TOT A/R)"].apply(lambda x: x*pax if pd.notnull(x) else None)
-        else:
-            df = search_duration(origins, dest_single, dests_multi, start, end, days_values, step_days,
-                                 currency, adults, children, nonstop, price_max, weekday, dep_after, dep_before, arr_after, arr_before)
-            if not df.empty and "PREZZO/PAX (TOT A/R)" in df.columns:
-                pax = adults + children
-                df["TOT STIM. GRUPPO"] = df["PREZZO/PAX (TOT A/R)"].apply(lambda x: x*pax if pd.notnull(x) else None)
+    # se c'è dest singola la aggiungo alle multiple (come in CLI: filtro su singola o su lista)
+    dests_filter = list(set(dests_multi + ([dest_single] if dest_single else [])))
+
+    with st.spinner("Cerco combinazioni A/R migliori…"):
+        df = search_duration(
+            origins, dest_single, dests_filter,
+            start, end, days_values, step_days,
+            currency, adults, children,
+            nonstop, price_max,
+            weekday, dep_after, dep_before,
+            arr_after, arr_before
+        )
 
     df = sort_df(df)
     if limit and limit > 0:
         df = df.head(int(limit))
 
     st.success(f"Trovate {len(df)} soluzioni.")
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    # Mostra campi chiave in testa
+    preferred_cols = [
+        "PREZZO/PAX (TOT A/R)","VALUTA","PAX (A+B)","TOT STIM. GRUPPO",
+        "OUT: PREZZO/PAX","OUT: PARTENZA (IT)","OUT: ARRIVO (IT)","OUT: VOLO",
+        "IN: PREZZO/PAX","IN: PARTENZA (IT)","IN: ARRIVO (IT)","IN: VOLO",
+        "ORIGINE","DEST","DURATA (gg)"
+    ]
+    cols = [c for c in preferred_cols if c in df.columns] + [c for c in df.columns if c not in preferred_cols]
+    st.dataframe(df[cols], use_container_width=True, hide_index=True)
 
     if not df.empty:
         c1, c2 = st.columns(2)
         with c1:
-            st.download_button("⬇️ CSV", to_csv_bytes(df), file_name="ryanair_risultati.csv", mime="text/csv")
+            st.download_button("⬇️ CSV", to_csv_bytes(df), file_name="ryanair_duration.csv", mime="text/csv")
         with c2:
-            st.download_button("⬇️ XLSX", to_xlsx_bytes(df), file_name="ryanair_risultati.xlsx",
+            st.download_button("⬇️ XLSX", to_xlsx_bytes(df), file_name="ryanair_duration.xlsx",
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 st.markdown("""
 ---
-**Suggerimenti**
-- Per avere la lista completa degli aeroporti, aggiungi un file `airports.csv` (colonne: `IATA,City,Airport,Country`) nella root dell'app. Verrà caricato automaticamente.
-- Il filtro *Solo diretti* dipende dai dati esposti dall'API: se i segmenti non sono disponibili, alcuni voli con scalo potrebbero rimanere nei risultati.
+**Note**
+- I risultati dipendono dai dati esposti da `ryanair-py`: *Solo diretti* viene applicato quando i segmenti/scali sono disponibili.
+- I filtri Giorni/Orari si riferiscono alla **partenza e arrivo dell’andata (outbound)** come nella CLI.
+- Default impostati come nel tuo esempio: `FCO → BVA`, `days=3`, `step=1`, `adults=2`, `children=2`, `nonstop=true`, `price_max=100`, periodo 2025-10-01 → 2026-05-31.
 """)
